@@ -42,6 +42,7 @@ if ($.isNode()) {
   cookiesArr.reverse();
   cookiesArr.push(...[$.getdata('CookieJD2'), $.getdata('CookieJD')]);
   cookiesArr.reverse();
+  cookiesArr = cookiesArr.filter(item => item !== "" && item !== null && item !== undefined);
 }
 !function (n) {
   "use strict";
@@ -178,13 +179,7 @@ if ($.isNode()) {
         await TotalBean();
         console.log(`\n开始【京东账号${$.index}】${$.nickName || $.UserName}\n`);
         if (!$.isLogin) {
-          $.msg($.name, `【提示】cookie已失效`, `京东账号${$.index} ${$.nickName || $.UserName}\n请重新登录获取\nhttps://bean.m.jd.com/`, {"open-url": "https://bean.m.jd.com/"});
-
-          if ($.isNode()) {
-            await notify.sendNotify(`${$.name}cookie已失效 - ${$.UserName}`, `京东账号${$.index} ${$.UserName}\n请重新登录获取cookie`);
-          } else {
-            $.setdata('', `CookieJD${i ? i + 1 : ""}`);//cookie失效，故清空cookie。$.setdata('', `CookieJD${i ? i + 1 : "" }`);//cookie失效，故清空cookie。
-          }
+         $.log(`\n京东账号${$.index} ${$.nickName || $.UserName}\ncookie已过期,请重新登录获取\n`)
           continue
         }
         await jdJxStory()
@@ -209,6 +204,12 @@ async function jdJxStory() {
   await $.wait(1000)
   await getJoyShop()
   await $.wait(1000)
+  if ($.joyIds && $.joyIds.length > 0) {
+    $.log('当前JOY分布情况')
+    $.log(`\n${$.joyIds[0]} ${$.joyIds[1]} ${$.joyIds[2]} ${$.joyIds[3]}`)
+    $.log(`${$.joyIds[4]} ${$.joyIds[5]} ${$.joyIds[6]} ${$.joyIds[7]}`)
+    $.log(`${$.joyIds[8]} ${$.joyIds[9]} ${$.joyIds[10]} ${$.joyIds[11]}\n`)
+  }
   for (let i = 0; i < $.joyIds.length; ++i) {
     if (!$.canBuy) {
       $.log(`金币不足，跳过购买`)
@@ -243,7 +244,7 @@ async function jdJxStory() {
   await getCoin()
   await $.wait(1000)
   await getUserBean()
-  await $.wait(2000)
+  await $.wait(5000)
   console.log(`当前信息：${$.bean} 京豆，${$.coin} 金币`)
 }
 
@@ -285,8 +286,14 @@ function getJoyShop() {
           data = JSON.parse(data);
           if (data.success && data.data && data.data.shop) {
             const shop = data.data.shop.filter(vo => vo.status === 1) || []
-            $.buyJoyLevel = shop.length ? shop[shop.length - 1]['joyId'] : 1
-            $.cost = shop.length ? shop[shop.length - 1]['coins'] : Infinity
+            $.buyJoyLevel = shop.length ? shop[shop.length - 1]['joyId'] : 1;//可购买的最大等级
+            if ($.isNode() && process.env.BUY_JPY_LEVEL) {
+              $.log(`当前可购买的最高JOY等级为${$.buyJoyLevel}级\n`)
+              $.buyJoyLevel = (process.env.BUY_JPY_LEVEL * 1) > $.buyJoyLevel ? $.buyJoyLevel : process.env.BUY_JPY_LEVEL * 1;
+              $.cost = shop[$.buyJoyLevel - 1]['coins']
+            } else {
+              $.cost = shop.length ? shop[shop.length - 1]['coins'] : Infinity
+            }
           }
         }
       } catch (e) {
@@ -336,6 +343,7 @@ function buyJoy(joyId) {
           data = JSON.parse(data);
           if (data.success) {
             if (data.data.eventInfo) {
+              await openBox(data.data.eventInfo.eventType, data.data.eventInfo.eventRecordId)
               $.canBuy = false
               return
             }
@@ -416,38 +424,16 @@ function getCoin() {
             if (data.data && data.data.tryMoneyJoyBeans) {
               console.log(`分红狗生效中，预计获得 ${data.data.tryMoneyJoyBeans} 京豆奖励`)
             }
-            if (data.data && data.data.totalCoinAmount)
-              $.coin = data.data.totalCoinAmount
+            if (data.data && data.data.totalCoinAmount) {
+              $.coin = data.data.totalCoinAmount;
+            } else {
+              $.coin = `获取当前金币数量失败`
+            }
             if (data.data && data.data.luckyBoxRecordId) {
-              await openBox(data.data.luckyBoxRecordId)
-            } else
-              $.log(`产出金币信息获取失败`)
-          }
-        }
-      } catch (e) {
-        $.logErr(e, resp)
-      } finally {
-        resolve();
-      }
-    })
-  })
-}
-
-function openBox(boxId) {
-  let body = {"eventType": "LUCKY_BOX_DROP", "eventRecordId": boxId}
-  return new Promise(async resolve => {
-    $.get(taskUrl('crazyJoy_event_getVideoAdvert', JSON.stringify(body)), async (err, resp, data) => {
-      try {
-        if (err) {
-          console.log(`${JSON.stringify(err)}`)
-          console.log(`${$.name} API请求失败，请检查网路重试`)
-        } else {
-          if (safeGet(data)) {
-            data = JSON.parse(data);
-            if (data['success']) {
-              $.log(`点击幸运盒子成功，剩余观看视频次数：${data.data.advertViewTimes}，等待30秒`)
-              await $.wait(30000)
-              await rewardBox(boxId)
+              await openBox('LUCKY_BOX_DROP',data.data.luckyBoxRecordId)
+            }
+            if (data.data) {
+              $.log(`此次在线收益：获得 ${data.data['coins']} 金币`)
             }
           }
         }
@@ -460,8 +446,37 @@ function openBox(boxId) {
   })
 }
 
-function rewardBox(boxId) {
-  let body = {"eventType": "LUCKY_BOX_DROP", "eventRecordId": boxId}
+function openBox(eventType = 'LUCKY_BOX_DROP', boxId) {
+  let body = { eventType, "eventRecordId": boxId}
+  return new Promise(async resolve => {
+    $.get(taskUrl('crazyJoy_event_getVideoAdvert', JSON.stringify(body)), async (err, resp, data) => {
+      try {
+        if (err) {
+          console.log(`${JSON.stringify(err)}`)
+          console.log(`${$.name} API请求失败，请检查网路重试`)
+        } else {
+          if (safeGet(data)) {
+            data = JSON.parse(data);
+            if (data['success']) {
+              $.log(`点击幸运盒子成功，剩余观看视频次数：${data.data.advertViewTimes}, ${data.data.advertViewTimes > 0 ? '等待30秒' : '跳出'}`)
+              if (data.data.advertViewTimes > 0) {
+                await $.wait(30000)
+                await rewardBox(eventType, boxId);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        $.logErr(e, resp)
+      } finally {
+        resolve();
+      }
+    })
+  })
+}
+
+function rewardBox(eventType, boxId) {
+  let body = { eventType, "eventRecordId": boxId}
   return new Promise(async resolve => {
     $.get(taskUrl('crazyJoy_event_obtainAward', JSON.stringify(body)), async (err, resp, data) => {
       try {
